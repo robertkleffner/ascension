@@ -1,9 +1,12 @@
-#lang racket
+#lang racket/base
 
 (require file/gunzip)
 (require racket/class)
+(require racket/math)
 (require racket/path)
 (require racket/draw)
+(require racket/list)
+(require "util.rkt")
 
 (provide hgt-port->elevations
          hgt-gz-port->elevations
@@ -11,13 +14,34 @@
          hgt-gz-file->elevations
          hgt-file->raster-dem
          hgt-gz-file->raster-dem
-         raster-dem->bitmap%)
+         raster-dem->grayscale-bitmap%
+         raster-dem
+         raster-dem-lat-south
+         raster-dem-lon-west
+         raster-dem-lat-step
+         raster-dem-lon-step
+         raster-dem-rows
+         raster-dem-cols
+         raster-dem-elevs
+         same-dimension-raster-dem
+         NO-DATA)
 
 
 
 (struct raster-dem (lat-south lon-west lat-step lon-step rows cols elevs) #:transparent)
 
+(define (same-dimension-raster-dem dem elevs)
+    (raster-dem (raster-dem-lat-south dem)
+                (raster-dem-lon-west dem)
+                (raster-dem-lat-step dem)
+                (raster-dem-lon-step dem)
+                (raster-dem-rows dem)
+                (raster-dem-cols dem)
+                elevs))
 
+
+
+(define NO-DATA -32768)
 
 (define (hgt-port->elevations port)
     (define (rec-hgt-read elevs)
@@ -25,7 +49,7 @@
         (if (eof-object? inbytes)
             elevs
             (rec-hgt-read (cons (integer-bytes->integer inbytes #t #t) elevs))))
-    (reverse (rec-hgt-read null)))
+    (list->vector (reverse (rec-hgt-read null))))
 
 (define (hgt-gz-port->elevations port)
     (define-values (hgt-in gz-out) (make-pipe))
@@ -65,16 +89,18 @@
 
 
 
-(define (raster-dem->bitmap% dem)
+(define (raster-dem->grayscale-bitmap% dem)
     (define cols (raster-dem-cols dem))
-    (define max-elev (apply max (raster-dem-elevs dem)))
-    (define min-elev (apply min (raster-dem-elevs dem)))
+    (define max-elev (vector-max (raster-dem-elevs dem)))
+    (define min-elev (vector-min (raster-dem-elevs dem)))
     (define norm-factor (/ 1 (- max-elev min-elev)))
-    (define target (make-bitmap (raster-dem-rows dem) (raster-dem-cols dem)))
-    (define dc (new bitmap-dc% [bitmap target]))
-    (for ([(elev index) (in-indexed (raster-dem-elevs dem))])
-        (define x (remainder index cols))
-        (define y (quotient index cols))
-        (define pixel (exact-round (* norm-factor (- elev min-elev) 255)))
-        (send dc set-pixel x y (instantiate color% (pixel pixel pixel))))
+    (define target (make-bitmap (raster-dem-cols dem) (raster-dem-rows dem)))
+    (when (> (- max-elev min-elev) 0)
+        (define dc (new bitmap-dc% [bitmap target]))
+        (define pixels
+            (list->bytes (flatten
+                (for/list ([elev (in-vector (raster-dem-elevs dem))])
+                    (define pixel (exact-round (* norm-factor (- elev min-elev) 255)))
+                    (list 255 pixel pixel pixel)))))
+        (send dc set-argb-pixels 0 0 (raster-dem-cols dem) (raster-dem-rows dem) pixels))
     target)
